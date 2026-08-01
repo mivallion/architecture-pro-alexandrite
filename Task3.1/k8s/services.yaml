@@ -1,0 +1,91 @@
+# Конфигурация сервисов (скопирована из репозитория
+# Yandex-Practicum/architecture-alexandrite-k8s-trace и дополнена
+# переменными окружения OpenTelemetry).
+#
+# Трейсы отправляются по OTLP (gRPC) в Jaeger Collector:
+# http://simplest-collector:4317
+#
+# ВАЖНО про namespace: jaeger-instance.yaml применяется БЕЗ -n (см. README),
+# поэтому Jaeger CR "simplest" и создаваемые оператором сервисы
+# (simplest-query, simplest-collector) живут в том же namespace, что и эти
+# сервисы (по умолчанию default) — короткое имя simplest-collector
+# резолвится из этого namespace. Если вы применили CR с -n observability,
+# замените endpoint на http://simplest-collector.observability:4317 и
+# добавьте -n observability к port-forward для simplest-query.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-a
+  template:
+    metadata:
+      labels:
+        app: service-a
+    spec:
+      containers:
+        - name: service-a
+          image: service-a:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: service-a
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://simplest-collector:4317
+            - name: SERVICE_B_URL
+              value: http://service-b:8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-a
+spec:
+  selector:
+    app: service-a
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-b
+  template:
+    metadata:
+      labels:
+        app: service-b
+    spec:
+      containers:
+        - name: service-b
+          image: service-b:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: service-b
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://simplest-collector:4317
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-b
+spec:
+  selector:
+    app: service-b
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
