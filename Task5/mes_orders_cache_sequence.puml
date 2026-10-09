@@ -1,0 +1,66 @@
+@startuml
+title MES order list caching with Cache-Aside
+
+actor Operator
+boundary "MES Dashboard" as Dashboard
+control "MES API" as API
+database "Redis\nList cache" as Redis
+database "MES DB\nSource of truth" as DB
+
+== Read the order list ==
+
+Operator -> Dashboard: Open or refresh the order list
+Dashboard -> API: GET /orders?filters&sort&page
+API -> DB: Read orders_list cache version
+DB --> API: version = 42
+API -> API: Derive access scope from authorization context\nand build key from version, filters, sort and page
+API -> Redis: GET mes:orders:list:v42:{query-hash}
+
+alt Cache hit
+    Redis --> API: Cached order list
+    API --> Dashboard: 200 OK, order list
+else Cache miss
+    Redis --> API: Key not found
+    API -> DB: SELECT current order list
+    DB --> API: Current order list
+    API -> Redis: SET key, serialized list, EX 5 minutes
+    Redis --> API: OK
+    API --> Dashboard: 200 OK, order list
+else Redis unavailable
+    Redis --> API: Connection error
+    API -> DB: SELECT current order list
+    DB --> API: Current order list
+    API --> Dashboard: 200 OK, order list
+    API -> API: Record cache error metric and log
+end
+
+Dashboard --> Operator: Display the order list
+
+== Change the order status ==
+
+Operator -> Dashboard: Change order status
+Dashboard -> API: PATCH /orders/{id}/status
+note over API, DB
+  Dashboard, B2B and RabbitMQ commands use the same write path.
+end note
+API -> DB: BEGIN
+API -> DB: UPDATE order status
+API -> DB: INCREMENT orders_list cache version
+
+alt Transaction committed
+    API -> DB: COMMIT
+    DB --> API: Status saved, version = 43
+    note over Redis
+      Keys with v42 are no longer reachable.
+      They will be removed by TTL.
+    end note
+    API --> Dashboard: 200 OK, updated order
+    Dashboard --> Operator: Display the new status
+else Database error
+    API -> DB: ROLLBACK
+    DB --> API: Status and version unchanged
+    API --> Dashboard: Error response
+    Dashboard --> Operator: Show update error
+end
+
+@enduml
